@@ -1,0 +1,20 @@
+# readerly-docs — the workspace root: source-of-truth docs, schema, and the
+# archived v1 site. The two application projects are their OWN git repositories
+# and must never be nested inside this one.
+readerly-api/
+readerly-frontend/
+
+# Never commit secrets. There shouldn't be any at this level, but guard anyway.
+.env
+.env.*
+
+# Claude Code local, machine-specific settings (the ".local" file is per-user;
+# shareable .claude config like settings.json/agents/skills would still commit).
+.claude/settings.local.json
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
