@@ -293,9 +293,9 @@ Access rules mirror Alibaba: a public landing page, everything else gated.
 | `library.html` | Browse digital library — search, categories | P1 |
 | `book.html?id=` | Book detail. Read button (subscribers) or subscribe prompt | P1 |
 | `reader.html?id=` | The reading interface | P1 |
-| `subscribe.html` | Plan details → Paystack | P1 |
+| `subscribe.html` | Subscribe via Paystack and/or manual bank transfer (admin-toggleable); shows status + cancel if already active | P1 |
 | `my-reading.html` | Books in progress + finished, with % | P1 |
-| `account.html` | Profile, password, subscription management | P1 |
+| `account.html` | Profile (name/email, read-only) + subscription status & cancel (pending/rejected states shown) | P1 |
 | `market.html` | Physical book catalog | P2 |
 | `cart.html` | Cart review | P2 |
 | `checkout.html` | Delivery details + payment | P2 |
@@ -308,7 +308,7 @@ Access rules mirror Alibaba: a public landing page, everything else gated.
 |---|---|---|
 | `admin.html` | Admin login | P1 |
 | `admin-books.html` | Add/edit/publish digital books, upload PDFs, set rights_basis | P1 |
-| `admin-subscribers.html` | Subscriber list + status | P1 |
+| `admin-subscribers.html` | Payment settings (method toggles + bank details) and the manual-payment review queue (approve/reject with proof) | P1 |
 | `admin-pending.html` | Review seller submissions → approve/reject with reason | P2 |
 | `admin-orders.html` | All orders, status updates, cancellation reasons | P2 |
 | `admin-payouts.html` | Seller balances owed / mark paid | P2 |
@@ -343,10 +343,13 @@ All under `readerly-api`. All SQL parameterized. All prices computed server-side
 ### Subscription (P1)
 | Method | Route | Notes |
 |---|---|---|
-| GET | `/api/subscription` | Current status + period end |
-| POST | `/api/subscription/initialize` | Start Paystack subscription, return auth URL |
-| POST | `/api/subscription/cancel` | Cancel via Paystack, mark cancelled |
-| POST | `/api/webhooks/paystack` | **Verify signature.** Handles `charge.success`, `subscription.create`, `subscription.disable`, `invoice.payment_failed` |
+| GET | `/api/settings/public` | Public payment settings: method toggles; bank details only when manual is enabled |
+| GET | `/api/subscription` | Current status + period end; also returns the user's latest manual payment (for `account.html` states) |
+| POST | `/api/subscription/initialize` | Start a Paystack transaction (if enabled), return `authorization_url`. 400 if disabled; 500 (logged) if key missing |
+| POST | `/api/subscription/manual/upload-url` | Signed upload URL for a payment-proof image (private `payment-proofs` bucket) |
+| POST | `/api/subscription/manual/submit` | Submit a bank-transfer proof → `manual_payments` row, `pending_review` |
+| POST | `/api/subscription/cancel` | Set `cancelled_at` (keep access to period end); disable on Paystack if codes present |
+| POST | `/api/webhooks/paystack` | **Verify HMAC-SHA512 signature** (`x-paystack-signature`) over the raw body first. Handles `charge.success`, `subscription.create`, `subscription.disable` |
 
 ### Market (P2)
 | Method | Route |
@@ -363,10 +366,14 @@ All under `readerly-api`. All SQL parameterized. All prices computed server-side
 |---|---|
 | POST | `/api/admin/login` |
 | GET/POST/PUT/DELETE | `/api/admin/books` |
-| POST | `/api/admin/books/upload` — signed upload URL for PDF/cover |
+| POST | `/api/admin/upload-url` — signed upload URL for PDF/cover |
+| GET/PUT | `/api/admin/settings` — read/update payment settings (toggles + bank details) |
+| GET | `/api/admin/manual-payments` — manual-payment review queue (optional `?status=`) |
+| GET | `/api/admin/manual-payments/[id]/proof-url` — signed **read** URL for a proof image |
+| POST | `/api/admin/manual-payments/[id]/approve` — approve → `activateSubscription` + `MANUAL-` ledger row |
+| POST | `/api/admin/manual-payments/[id]/reject` — reject with an optional note |
 | GET | `/api/admin/pending` *(P2)* |
 | POST | `/api/admin/approve` · `/api/admin/reject` *(P2)* |
-| GET | `/api/admin/subscribers` |
 | GET | `/api/admin/orders` *(P2)* |
 
 ---
