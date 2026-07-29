@@ -292,7 +292,7 @@ Access rules mirror Alibaba: a public landing page, everything else gated.
 | `home.html` | Dashboard. Continue reading, subscription status, quick links | P1 |
 | `library.html` | Browse digital library — search, categories | P1 |
 | `book.html?id=` | Book detail. Read button (subscribers) or subscribe prompt | P1 |
-| `reader.html?id=` | The reading interface | P1 |
+| `reader.html?id=` | In-browser PDF reader (PDF.js). Subscriber-gated via a short-lived signed URL; resume, page nav (buttons/arrows/swipe), progress bar, zoom, light/dark themes, expired-session recovery | P1 |
 | `subscribe.html` | Subscribe via Paystack and/or manual bank transfer (admin-toggleable); shows status + cancel if already active | P1 |
 | `my-reading.html` | Books in progress + finished, with % | P1 |
 | `account.html` | Profile (name/email, read-only) + subscription status & cancel (pending/rejected states shown) | P1 |
@@ -331,14 +331,14 @@ All under `readerly-api`. All SQL parameterized. All prices computed server-side
 |---|---|---|
 | GET | `/api/books` | Approved books. Filters: `format`, `category`, `q` (search) |
 | GET | `/api/books/[id]` | Single book. Never returns `file_url` directly |
-| GET | `/api/books/[id]/read` | **Subscriber-only.** Verifies active subscription server-side, returns short-lived signed URL to the PDF |
+| GET | `/api/books/[id]/read` | **Subscriber-only.** Book must be approved (else identical 404); verifies active subscription via `hasActiveAccess` (403 if not); returns a signed URL to the PDF (`book-files`, 3600s), never the raw path |
 
 ### Reading progress (P1)
 | Method | Route | Notes |
 |---|---|---|
-| GET | `/api/progress` | All of the user's progress rows |
-| GET | `/api/progress/[bookId]` | Progress for one book |
-| POST | `/api/progress` | Upsert `{ bookId, currentPage, percent }` |
+| GET | `/api/progress` | All of the user's progress rows, joined with book title/author/cover |
+| GET | `/api/progress/[bookId]` | Progress for one book; `{ progress: null }` when none (not a 404) |
+| POST | `/api/progress` | Upsert `{ bookId, currentPage, totalPages }`. `percent` is computed server-side in SQL; `currentPage` is clamped to `totalPages` |
 
 ### Subscription (P1)
 | Method | Route | Notes |
