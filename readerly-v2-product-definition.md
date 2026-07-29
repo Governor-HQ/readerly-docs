@@ -322,9 +322,11 @@ All under `readerly-api`. All SQL parameterized. All prices computed server-side
 ### Auth
 | Method | Route | Notes |
 |---|---|---|
-| POST | `/api/auth/register` | name, email, password → bcrypt hash, return JWT |
-| POST | `/api/auth/login` | email, password → JWT (30d) |
+| POST | `/api/auth/register` | name, email, password → bcrypt hash, return JWT. Rate-limited (5/60min per IP) → 429 |
+| POST | `/api/auth/login` | email, password → JWT (30d). Rate-limited (5/15min per IP and per email) → 429 |
 | GET | `/api/auth/me` | JWT → user profile + subscription status |
+
+Admin login (`/api/admin/login`) is likewise rate-limited (5/15min per IP) → 429.
 
 ### Library (P1)
 | Method | Route | Notes |
@@ -457,7 +459,7 @@ Carried over from the Alibaba TODO list — build these in from the start rather
 - [ ] All prices and totals computed server-side
 - [ ] Ownership checks on every user-scoped endpoint (a user can only read their own orders/progress)
 - [ ] Paystack webhook signature verified before processing
-- [ ] Rate limiting on auth endpoints
+- [x] Rate limiting on auth endpoints — `lib/rateLimit.js` (DB-backed, `rate_limits` table) gates `/api/auth/login` (5/15min per IP + per email), `/api/auth/register` (5/60min per IP), and `/api/admin/login` (5/15min per IP); over the limit → 429 (Phase 6)
 - [ ] CORS restricted to `FRONTEND_URL`
 - [ ] Password policy: minimum 8 characters
 - [ ] Admin token hardened and separate from user JWT

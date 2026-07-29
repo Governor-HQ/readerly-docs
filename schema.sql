@@ -222,3 +222,16 @@ CREATE TABLE IF NOT EXISTS manual_payments (
 );
 CREATE INDEX IF NOT EXISTS idx_manual_payments_status ON manual_payments(status);
 CREATE INDEX IF NOT EXISTS idx_manual_payments_user ON manual_payments(user_id);
+
+
+-- ============================================================================
+-- Phase 6 addition — rate limiting.
+-- (Also maintained as the runnable file schema-phase6-additions.sql.)
+-- One row per auth attempt; counted within a rolling window by created_at.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS rate_limits (
+  id         SERIAL PRIMARY KEY,
+  key        TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_rate_limits_key_time ON rate_limits(key, created_at);
