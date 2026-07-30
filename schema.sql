@@ -235,3 +235,20 @@ CREATE TABLE IF NOT EXISTS rate_limits (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_rate_limits_key_time ON rate_limits(key, created_at);
+
+
+-- ============================================================================
+-- Phase 7 additions — physical marketplace.
+-- (Also maintained as the runnable file schema-phase7-additions.sql.)
+-- ============================================================================
+ALTER TABLE manual_payments ADD COLUMN IF NOT EXISTS order_id INTEGER REFERENCES orders(id);
+CREATE INDEX IF NOT EXISTS idx_manual_payments_order ON manual_payments(order_id);
+
+INSERT INTO delivery_zones (code, label, fee_kobo) VALUES
+  ('ENUGU',      'Enugu (local / pickup)', 150000),
+  ('SOUTH_EAST', 'South-East states',      250000),
+  ('NATIONWIDE', 'Nationwide',             400000)
+ON CONFLICT (code) DO NOTHING;
+
+INSERT INTO settings (key, value) VALUES ('commission_percent', '10')
+ON CONFLICT (key) DO NOTHING;

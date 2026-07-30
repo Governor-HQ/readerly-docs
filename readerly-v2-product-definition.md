@@ -296,12 +296,14 @@ Access rules mirror Alibaba: a public landing page, everything else gated.
 | `subscribe.html` | Subscribe via Paystack and/or manual bank transfer (admin-toggleable); shows status + cancel if already active | P1 |
 | `my-reading.html` | Books in progress + finished, with % | P1 |
 | `account.html` | Profile (name/email, read-only) + subscription status & cancel (pending/rejected states shown) | P1 |
-| `market.html` | Physical book catalog | P2 |
-| `cart.html` | Cart review | P2 |
-| `checkout.html` | Delivery details + payment | P2 |
-| `sell.html` | Submit a book for approval | P2 |
-| `my-listings.html` | Seller's submissions + statuses | P2 |
-| `my-orders.html` | Purchase history | P2 |
+| `market.html` | Physical book catalog (physical/BOTH only) | P2 ✅ |
+| `cart.html` | Cart review (localStorage cart via `js/cart.js`) | P2 ✅ |
+| `checkout.html` | Delivery details + payment. Two-step: place order (server-computed totals) → then upload a bank-transfer proof, reusing the manual-payment flow | P2 ✅ |
+| `sell.html` | Submit a book for approval (cover upload via signed URL) | P2 ✅ |
+| `my-listings.html` | Seller's submissions + statuses (incl. rejection reason) | P2 ✅ |
+| `my-orders.html` | Purchase history | P2 ✅ |
+
+`home.html` also gained a **Marketplace** dashboard card linking to `market.html` (P2 ✅).
 
 ### Admin (gated by ADMIN_SECRET, separate from user JWT)
 | Page | Purpose | Phase |
@@ -309,9 +311,8 @@ Access rules mirror Alibaba: a public landing page, everything else gated.
 | `admin.html` | Admin login | P1 |
 | `admin-books.html` | Add/edit/publish digital books, upload PDFs, set rights_basis | P1 |
 | `admin-subscribers.html` | Payment settings (method toggles + bank details) and the manual-payment review queue (approve/reject with proof) | P1 |
-| `admin-pending.html` | Review seller submissions → approve/reject with reason | P2 |
-| `admin-orders.html` | All orders, status updates, cancellation reasons | P2 |
-| `admin-payouts.html` | Seller balances owed / mark paid | P2 |
+| `admin-market.html` | Review seller submissions → approve/reject with reason, plus a physical-catalogue view. **Built as `admin-market.html`**, not `admin-pending.html`. | P2 ✅ |
+| `admin-orders.html` | All orders, status updates, cancellation reasons — **and the seller-payouts section (balances owed / mark paid) is folded in here**, so no separate `admin-payouts.html` was built. | P2 ✅ |
 
 ---
 
@@ -353,15 +354,19 @@ Admin login (`/api/admin/login`) is likewise rate-limited (5/15min per IP) → 4
 | POST | `/api/subscription/cancel` | Set `cancelled_at` (keep access to period end); disable on Paystack if codes present |
 | POST | `/api/webhooks/paystack` | **Verify HMAC-SHA512 signature** (`x-paystack-signature`) over the raw body first. Handles `charge.success`, `subscription.create`, `subscription.disable` |
 
-### Market (P2)
+### Market (P2) — ✅ built
 | Method | Route |
 |---|---|
-| POST | `/api/books/submit` — seller submission, saved as `pending` |
-| GET | `/api/my/listings` |
-| POST | `/api/orders` — create order, server-computed totals |
-| GET | `/api/my/orders` |
-| POST | `/api/payments/verify` — **must check the order belongs to the caller** |
-| GET | `/api/delivery-zones` |
+| POST | `/api/books/submit/cover-url` — signed upload URL for a listing cover (`book-covers`, path `listings/{userId}/…`) |
+| POST | `/api/books/submit` — seller submission, saved as `pending`, `format='PHYSICAL'`, with `condition` + `price_kobo` + categories |
+| GET | `/api/my/listings` — the seller's own submissions + statuses (+ rejection reason) |
+| GET | `/api/delivery-zones` — zone `code` / `label` / `fee_kobo` |
+| POST | `/api/orders` — create order; **all totals (subtotal, delivery, commission, payout) computed server-side**; stock re-checked; status `pending` (stock **not** decremented until payment is approved) |
+| GET | `/api/my/orders` — buyer's purchase history + items |
+| POST | `/api/orders/[id]/upload-url` — signed upload URL for the order's payment proof (`payment-proofs`, path `proofs/{userId}/…`); ownership-checked |
+| POST | `/api/orders/[id]/submit-payment` — record a `manual_payments` row tagged with `order_id`, `pending_review`; ownership-checked |
+
+> **Payment path changed vs. the original spec.** Instead of a Paystack `/api/payments/verify` endpoint, the marketplace **reuses the existing manual bank-transfer + admin-approval flow** (per the Phase 7 brief). The buyer uploads a transfer proof; an admin approves it, which flips the order to `paid`, decrements stock, and writes a `payments` ledger row (`purpose='order'`). `/api/payments/verify` was **not** built.
 
 ### Admin
 | Method | Route |
@@ -372,11 +377,14 @@ Admin login (`/api/admin/login`) is likewise rate-limited (5/15min per IP) → 4
 | GET/PUT | `/api/admin/settings` — read/update payment settings (toggles + bank details) |
 | GET | `/api/admin/manual-payments` — manual-payment review queue (optional `?status=`) |
 | GET | `/api/admin/manual-payments/[id]/proof-url` — signed **read** URL for a proof image |
-| POST | `/api/admin/manual-payments/[id]/approve` — approve → `activateSubscription` + `MANUAL-` ledger row |
-| POST | `/api/admin/manual-payments/[id]/reject` — reject with an optional note |
-| GET | `/api/admin/pending` *(P2)* |
-| POST | `/api/admin/approve` · `/api/admin/reject` *(P2)* |
-| GET | `/api/admin/orders` *(P2)* |
+| POST | `/api/admin/manual-payments/[id]/approve` — **branches on `order_id`.** Subscription proof → `activateSubscription` + `MANUAL-` ledger row. Order proof (P2) → mark order `paid`, decrement stock per item, write a `purpose='order'` ledger row. Idempotent (409 if already approved). |
+| POST | `/api/admin/manual-payments/[id]/reject` — reject with an optional note. The subscription review queue (`GET /api/admin/manual-payments`) excludes order payments (`WHERE order_id IS NULL`). |
+| GET | `/api/admin/pending-listings` *(P2 ✅)* — physical `pending` books + seller + categories (built as `pending-listings`, not `pending`) |
+| POST | `/api/admin/listings/[id]/approve` · `/api/admin/listings/[id]/reject` *(P2 ✅)* — reject stores a reason (built under `listings/[id]/…`, not bare `approve`/`reject`) |
+| GET | `/api/admin/orders` *(P2 ✅)* — all orders + buyer + items + latest payment id/status |
+| POST | `/api/admin/orders/[id]/status` *(P2 ✅)* — set `processing`\|`shipped`\|`delivered`\|`cancelled` (cancel stores a reason) |
+| GET | `/api/admin/payouts` *(P2 ✅)* — per-seller unpaid balance owed (orders in paid/processing/shipped/delivered) |
+| POST | `/api/admin/payouts/[sellerId]/mark-paid` *(P2 ✅)* — mark that seller's `order_items.payout_status` = `paid` |
 
 ---
 
@@ -408,11 +416,11 @@ The single most important UX in Phase 1.
 - Access is granted only while `status = 'active'` and `current_period_end > NOW()`
 - Webhook is the source of truth for renewals and failures — never grant access from a frontend callback alone
 
-### Physical marketplace — P2
-- Readerly takes a **percentage commission** on each sale (exact % still to be finalised — store it as a configurable value, not a hardcoded number)
-- Buyer pays Readerly in full; Readerly settles the seller afterwards
-- `order_items` records `commission_kobo`, `payout_kobo`, and `payout_status` per line so the admin payouts page can show exactly what is owed
-- Delivery is tiered by zone, fees editable from admin
+### Physical marketplace — P2 ✅
+- Readerly takes a **percentage commission** on each sale. **As built and currently seeded: 10%**, stored configurably in `settings` under key `commission_percent` (read server-side at order time — not hardcoded). `commission_kobo = round(lineTotal × commission_percent / 100)`, `payout_kobo = lineTotal − commission_kobo`, per line.
+- Buyer pays Readerly in full (manual bank transfer + admin approval); Readerly settles the seller afterwards.
+- `order_items` records `commission_kobo`, `payout_kobo`, and `payout_status` per line so the admin payouts view can show exactly what is owed.
+- Delivery is tiered by zone, fees editable from admin. **As currently seeded** (`delivery_zones`): Enugu (local / pickup) **₦1,500**, South-East states **₦2,500**, Nationwide **₦4,000**.
 
 ---
 
