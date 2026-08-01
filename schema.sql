@@ -252,3 +252,30 @@ ON CONFLICT (code) DO NOTHING;
 
 INSERT INTO settings (key, value) VALUES ('commission_percent', '10')
 ON CONFLICT (key) DO NOTHING;
+
+
+-- ============================================================================
+-- Phase 9 additions — marketplace business model (seller agreement + payouts).
+-- (Also maintained as the runnable file schema-phase9-additions.sql.)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS merchant_profiles (
+  user_id                   INTEGER PRIMARY KEY REFERENCES users(id),
+  full_name                 TEXT NOT NULL,
+  bank_name                 TEXT NOT NULL,
+  account_number            TEXT NOT NULL,
+  account_name              TEXT NOT NULL,
+  agreed_commission_percent NUMERIC(5,2) NOT NULL,
+  agreed_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS payout_requests (
+  id           SERIAL PRIMARY KEY,
+  seller_id    INTEGER NOT NULL REFERENCES users(id),
+  amount_kobo  INTEGER NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'pending', -- 'pending' | 'paid' | 'rejected'
+  admin_note   TEXT,
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  paid_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_payout_requests_seller ON payout_requests(seller_id);
+CREATE INDEX IF NOT EXISTS idx_payout_requests_status ON payout_requests(status);

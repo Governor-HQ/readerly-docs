@@ -273,6 +273,37 @@ CREATE TABLE delivery_zones (
 ```
 **Recommended tiers:** Enugu/pickup — lowest · South-East states — mid · Rest of Nigeria — highest. Fees editable from admin, not hardcoded.
 
+### 5.11 merchant_profiles — **P9** ✅
+A user becomes a seller by agreeing to the terms. The commission rate is
+**snapshotted** here at agreement time — later edits to `settings.commission_percent`
+never rewrite an existing seller's agreed rate.
+```sql
+CREATE TABLE merchant_profiles (
+  user_id                   INTEGER PRIMARY KEY REFERENCES users(id),
+  full_name                 TEXT NOT NULL,
+  bank_name                 TEXT NOT NULL,
+  account_number            TEXT NOT NULL,
+  account_name              TEXT NOT NULL,
+  agreed_commission_percent NUMERIC(5,2) NOT NULL,   -- snapshot, not a live reference
+  agreed_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+### 5.12 payout_requests — **P9** ✅
+A seller's withdrawal requests. Available balance is computed live (never stored):
+`SUM(order_items.payout_kobo on paid orders) − SUM(amount_kobo of pending/paid requests)`.
+```sql
+CREATE TABLE payout_requests (
+  id           SERIAL PRIMARY KEY,
+  seller_id    INTEGER NOT NULL REFERENCES users(id),
+  amount_kobo  INTEGER NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'pending', -- 'pending' | 'paid' | 'rejected'
+  admin_note   TEXT,
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  paid_at      TIMESTAMPTZ
+);
+```
+
 ---
 
 ## 6. Pages
@@ -295,24 +326,27 @@ Access rules mirror Alibaba: a public landing page, everything else gated.
 | `reader.html?id=` | In-browser PDF reader (PDF.js). Subscriber-gated via a short-lived signed URL; resume, page nav (buttons/arrows/swipe), progress bar, zoom, light/dark themes, expired-session recovery | P1 |
 | `subscribe.html` | Subscribe via Paystack and/or manual bank transfer (admin-toggleable); shows status + cancel if already active | P1 |
 | `my-reading.html` | Books in progress + finished, with % | P1 |
-| `account.html` | Profile (name/email, read-only) + subscription status & cancel (pending/rejected states shown) | P1 |
+| `account.html` | Profile + subscription status & cancel. **P9:** subscription **receipts** (ref/amount/date), and a **Selling** section — available balance, request a withdrawal, withdrawal history | P1 · P9 ✅ |
+| `become-a-seller.html` | Seller onboarding: shows the current commission rate, explains the balance/withdrawal payout model, collects bank details, requires explicit agreement → creates the `merchant_profiles` row | P9 ✅ |
 | `market.html` | Physical book catalog (physical/BOTH only) | P2 ✅ |
 | `cart.html` | Cart review (localStorage cart via `js/cart.js`) | P2 ✅ |
 | `checkout.html` | Delivery details + payment. Two-step: place order (server-computed totals) → then upload a bank-transfer proof, reusing the manual-payment flow | P2 ✅ |
-| `sell.html` | Submit a book for approval (cover upload via signed URL) | P2 ✅ |
+| `sell.html` | Submit a book for approval (cover upload via signed URL). **P9:** redirects to `become-a-seller.html` first if the user has no `merchant_profiles` row | P2 · P9 ✅ |
 | `my-listings.html` | Seller's submissions + statuses (incl. rejection reason) | P2 ✅ |
-| `my-orders.html` | Purchase history | P2 ✅ |
+| `my-orders.html` | Purchase history. **P9:** per-order **receipts** (ref/amount/date) | P2 · P9 ✅ |
 
 `home.html` also gained a **Marketplace** dashboard card linking to `market.html` (P2 ✅).
+
+**P9 UX (locked pages):** an always-present **"← Back"** link is injected on every locked page (via `requireAuth`), and the marketplace-family pages (`market`, `cart`, `checkout`, `sell`, `my-listings`, `my-orders`) share a single consolidated **menu** (`js/user-menu.js`) instead of a row of separate buttons. `checkout.html` gained a copy-to-clipboard button on the bank account number.
 
 ### Admin (gated by ADMIN_SECRET, separate from user JWT)
 | Page | Purpose | Phase |
 |---|---|---|
 | `admin.html` | Admin login | P1 |
 | `admin-books.html` | Add/edit/publish digital books, upload PDFs, set rights_basis | P1 |
-| `admin-subscribers.html` | Payment settings (method toggles + bank details) and the manual-payment review queue (approve/reject with proof) | P1 |
-| `admin-market.html` | Review seller submissions → approve/reject with reason, plus a physical-catalogue view. **Built as `admin-market.html`**, not `admin-pending.html`. | P2 ✅ |
-| `admin-orders.html` | All orders, status updates, cancellation reasons — **and the seller-payouts section (balances owed / mark paid) is folded in here**, so no separate `admin-payouts.html` was built. | P2 ✅ |
+| `admin-subscribers.html` | Payment settings and the manual-payment review queue. **P9:** the queue gained a **status filter** (pending/approved/rejected/all) so the full history is viewable, not just pending. | P1 · P9 ✅ |
+| `admin-market.html` | Review seller submissions → approve/reject, plus a physical-catalogue view. **P9:** an **Add a physical book** form (admin's own stock, no seller, immediately live, zero commission) and a **Delivery zones** editor (label + fee per zone). | P2 · P9 ✅ |
+| `admin-orders.html` | All orders, status updates, cancellation reasons. **P9:** the payouts section is now a **Payout requests** review (seller withdrawal requests + bank details → mark paid / reject, with a status filter), replacing the Phase-7 per-seller aggregate. No separate `admin-payouts.html`. | P2 · P9 ✅ |
 
 ---
 
@@ -368,6 +402,16 @@ Admin login (`/api/admin/login`) is likewise rate-limited (5/15min per IP) → 4
 
 > **Payment path changed vs. the original spec.** Instead of a Paystack `/api/payments/verify` endpoint, the marketplace **reuses the existing manual bank-transfer + admin-approval flow** (per the Phase 7 brief). The buyer uploads a transfer proof; an admin approves it, which flips the order to `paid`, decrements stock, and writes a `payments` ledger row (`purpose='order'`). `/api/payments/verify` was **not** built.
 
+### Marketplace — seller economy (P9) — ✅ built
+| Method | Route |
+|---|---|
+| POST | `/api/merchant/apply` — become a seller; creates `merchant_profiles`, **snapshotting** the current commission. 409 if already a merchant |
+| GET | `/api/merchant/profile` — the caller's profile (or `isMerchant:false`) + `currentCommissionPercent` |
+| GET | `/api/my/balance` — live-computed `{ earnedKobo, reservedKobo, availableKobo }` |
+| GET/POST | `/api/my/payout-requests` — list own requests / request a withdrawal (server rejects an amount above available balance; serialised per seller) |
+| GET | `/api/my/payments` — the caller's successful payments for on-page receipts (optional `?purpose=order\|subscription`) |
+| — | `POST /api/books/submit` now **403s (`needsOnboarding`)** if the caller has no `merchant_profiles` row |
+
 ### Admin
 | Method | Route |
 |---|---|
@@ -383,8 +427,11 @@ Admin login (`/api/admin/login`) is likewise rate-limited (5/15min per IP) → 4
 | POST | `/api/admin/listings/[id]/approve` · `/api/admin/listings/[id]/reject` *(P2 ✅)* — reject stores a reason (built under `listings/[id]/…`, not bare `approve`/`reject`) |
 | GET | `/api/admin/orders` *(P2 ✅)* — all orders + buyer + items + latest payment id/status |
 | POST | `/api/admin/orders/[id]/status` *(P2 ✅)* — set `processing`\|`shipped`\|`delivered`\|`cancelled` (cancel stores a reason) |
-| GET | `/api/admin/payouts` *(P2 ✅)* — per-seller unpaid balance owed (orders in paid/processing/shipped/delivered) |
-| POST | `/api/admin/payouts/[sellerId]/mark-paid` *(P2 ✅)* — mark that seller's `order_items.payout_status` = `paid` |
+| ~~GET `/api/admin/payouts`~~ · ~~POST `/api/admin/payouts/[sellerId]/mark-paid`~~ | **Removed in P9.** The Phase-7 per-seller aggregate + `payout_status` flip was replaced by the payout-requests model below; both routes were deleted. |
+| POST | `/api/admin/books` *(P9 ✅)* — extended: `format:'PHYSICAL'` creates admin stock (seller_id NULL, status `approved` immediately, price/stock/condition), which the orders route treats as **zero commission/payout** |
+| GET | `/api/admin/payout-requests` *(P9 ✅)* — all withdrawal requests + seller name/email + **bank details**; optional `?status=` |
+| POST | `/api/admin/payout-requests/[id]/mark-paid` · `/reject` *(P9 ✅)* — resolve a pending request; only `pending` is actionable (else 409). Reject releases the reserved balance |
+| GET | `/api/admin/delivery-zones` · PUT `/api/admin/delivery-zones/[code]` *(P9 ✅)* — list zones / update a zone's `fee_kobo` + `label` (admin-editable fees) |
 
 ---
 
@@ -419,8 +466,14 @@ The single most important UX in Phase 1.
 ### Physical marketplace — P2 ✅
 - Readerly takes a **percentage commission** on each sale. **As built and currently seeded: 10%**, stored configurably in `settings` under key `commission_percent` (read server-side at order time — not hardcoded). `commission_kobo = round(lineTotal × commission_percent / 100)`, `payout_kobo = lineTotal − commission_kobo`, per line.
 - Buyer pays Readerly in full (manual bank transfer + admin approval); Readerly settles the seller afterwards.
-- `order_items` records `commission_kobo`, `payout_kobo`, and `payout_status` per line so the admin payouts view can show exactly what is owed.
+- `order_items` records `commission_kobo`, `payout_kobo`, and `payout_status` per line.
 - Delivery is tiered by zone, fees editable from admin. **As currently seeded** (`delivery_zones`): Enugu (local / pickup) **₦1,500**, South-East states **₦2,500**, Nationwide **₦4,000**.
+
+### Seller economy — P9 ✅
+- **Sellers must onboard first.** A user agrees to the terms (`merchant_profiles`), and the commission rate is **snapshotted at that moment** — changing `settings.commission_percent` later never alters an already-agreed seller's rate (`agreed_commission_percent`).
+- **Admin-listed books (`seller_id IS NULL`) carry zero commission and zero payout** — the whole sale is Readerly's own revenue.
+- **Payout is a real account-balance model, not per-sale.** A seller's `available_balance = SUM(order_items.payout_kobo on paid orders) − SUM(payout_requests.amount_kobo where status is 'pending' or 'paid')` — computed live, never stored. A seller requests a withdrawal up to that balance; the admin transfers the money manually (as with every other manual step) and marks it `paid`. Rejecting a request releases the reserved amount back to the balance.
+- The Phase-7 per-seller `order_items.payout_status` flip (`/api/admin/payouts` + `[sellerId]/mark-paid`) was **removed** in P9, replaced entirely by this model. (`order_items.payout_kobo` is still the per-line source of truth the balance sums; only `payout_status` is now vestigial.)
 
 ---
 
